@@ -114,7 +114,7 @@ class CatboostModel:
         :param df: pandas.DataFrame - raw dataset to analyze
         :return: pandas.DataFrame with predicted results
         """
-        modified_data = preprocessing.process_data(df)
+        modified_data = df
         result = np.array([self.models[i].predict(modified_data).flatten() for i in range(0, self.model_count)])
         return stats.mode(result)[0][0]
 
