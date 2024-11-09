@@ -79,60 +79,97 @@ if edf_file_paths:
             matching_txt_file = txt_file
             break
 
-    # Парсинг TXT-файла
+    # Функция для преобразования времени в секунды
+    def time_to_seconds(t):
+        try:
+            if pd.isnull(t) or t == '':
+                return None
+            parts = list(map(int, re.split('[:]', str(t))))
+            if len(parts) == 3:
+                return parts[0] * 3600 + parts[1] * 60 + parts[2]
+            elif len(parts) == 2:
+                return parts[0] * 60 + parts[1]
+            elif len(parts) == 1:
+                return parts[0]
+            else:
+                return None
+        except ValueError:
+            return None
+
+    # Функция для парсинга и поиска корректных интервалов
+    def parse_intervals(file_path):
+        intervals_df = pd.read_csv(file_path, sep='\t', header=None, names=['NN', 'Время', 'Маркер'])
+        intervals_df['Начало'] = intervals_df['Время'].apply(time_to_seconds)
+
+        # Удаляем строки с некорректным временем
+        intervals_df['Начало'] = pd.to_numeric(intervals_df['Начало'], errors='coerce')
+        intervals_df = intervals_df.dropna(subset=['Начало']).reset_index(drop=True)
+
+        paired_intervals = []
+        open_markers = {}
+
+        for _, row in intervals_df.iterrows():
+            marker_match = re.match(r"([a-zA-Z]+)", row['Маркер'])
+            if marker_match:
+                marker_base = marker_match.group(0)
+                if marker_base in open_markers:
+                    start_row = open_markers[marker_base]
+                    # Проверяем, что время корректное
+                    if isinstance(row['Начало'], (int, float)) and isinstance(start_row['Начало'], (int, float)):
+                        if row['Начало'] > start_row['Начало']:
+                            paired_intervals.append((start_row['Начало'], row['Начало'], marker_base))
+                    del open_markers[marker_base]
+                else:
+                    open_markers[marker_base] = row
+
+        # Создаем DataFrame с корректными парами
+        if paired_intervals:
+            valid_intervals_df = pd.DataFrame(
+                paired_intervals,
+                columns=['Начало', 'Конец', 'Маркер']
+            )
+        else:
+            valid_intervals_df = pd.DataFrame(columns=['Начало', 'Конец', 'Маркер'])
+
+        return valid_intervals_df
+
+    # Парсинг TXT-файла с использованием новой логики
     intervals_df = None
     marker_colors = {}
     if matching_txt_file:
-        intervals_df = pd.read_csv(matching_txt_file, sep='\t', header=None, names=['NN', 'Время', 'Маркер'])
-        # Преобразование времени в секунды
-        def time_to_seconds(t):
-            try:
-                if pd.isnull(t) or t == '':
-                    return None
-                parts = list(map(int, re.split('[:]', str(t))))
-                if len(parts) == 3:
-                    return parts[0] * 3600 + parts[1] * 60 + parts[2]
-                elif len(parts) == 2:
-                    return parts[0] * 60 + parts[1]
-                elif len(parts) == 1:
-                    return parts[0]
-                else:
-                    return None
-            except ValueError:
-                return None
+        intervals_df = parse_intervals(matching_txt_file)
 
-        intervals_df['Начало'] = intervals_df['Время'].apply(time_to_seconds)
-        intervals_df = intervals_df.dropna(subset=['Начало'])  # Удаляем строки с NaN в 'Начало'
-        intervals_df['Конец'] = intervals_df['Начало'].shift(-1)
-        intervals_df['Конец'].fillna(intervals_df['Начало'] + 5, inplace=True)  # Длительность по умолчанию 5 секунд
-        intervals_df['Длительность'] = intervals_df['Конец'] - intervals_df['Начало']
-        # Преобразование времени в формат mm:ss
-        intervals_df['Время_формат'] = intervals_df['Начало'].apply(
-            lambda x: str(datetime.timedelta(seconds=int(x)))[2:7] if pd.notnull(x) else 'Unknown'
-        )
+        if not intervals_df.empty:
+            # Преобразование времени в формат mm:ss
+            intervals_df['Время_формат'] = intervals_df['Начало'].apply(
+                lambda x: str(datetime.timedelta(seconds=int(x)))[2:7] if pd.notnull(x) else 'Unknown'
+            )
 
-        # Сортировка интервалов по времени начала
-        intervals_df = intervals_df.sort_values(by='Начало').reset_index(drop=True)
+            # Сортировка интервалов по времени начала
+            intervals_df = intervals_df.sort_values(by='Начало').reset_index(drop=True)
 
-        # Словарь для расшифровки маркеров
-        marker_explanations = {
-            'swd': 'эпилептический разряд',
-            'ds': 'фаза глубокого сна',
-            'is': 'промежуточная фаза сна'
-        }
+            # Словарь для расшифровки маркеров
+            marker_explanations = {
+                'swd': 'эпилептический разряд',
+                'ds': 'фаза глубокого сна',
+                'is': 'промежуточная фаза сна'
+            }
 
-        # Получаем базовые маркеры (без номеров)
-        intervals_df['Базовый_маркер'] = intervals_df['Маркер'].str.extract(r'([a-zA-Z]+)')
-        unique_base_markers = intervals_df['Базовый_маркер'].unique()
+            # Маркеры уже содержат базовые маркеры
+            intervals_df['Базовый_маркер'] = intervals_df['Маркер']
 
-        # Добавляем выбор цвета для каждого базового маркера с расшифровкой
-        marker_colors = {}
-        color_options = ['red', 'green', 'blue', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
-        st.sidebar.subheader("Выбор цветов для маркеров")
-        for base_marker in unique_base_markers:
-            explanation = marker_explanations.get(base_marker, base_marker)
-            color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options, index=0, key=f"color_{base_marker}")
-            marker_colors[base_marker] = color
+            unique_base_markers = intervals_df['Базовый_маркер'].unique()
+
+            # Добавляем выбор цвета для каждого базового маркера с расшифровкой
+            marker_colors = {}
+            color_options = ['red', 'green', 'blue', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
+            st.sidebar.subheader("Выбор цветов для маркеров")
+            for base_marker in unique_base_markers:
+                explanation = marker_explanations.get(base_marker, base_marker)
+                color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options, index=0, key=f"color_{base_marker}")
+                marker_colors[base_marker] = color
+        else:
+            st.write("Нет корректных интервалов в TXT-файле.")
 
     try:
         # Используем контекстный менеджер для автоматического закрытия файла
@@ -159,7 +196,7 @@ if edf_file_paths:
             "Длительность окна (в секундах)",
             min_value=0.1,
             max_value=total_duration - start_time,
-            value=min(5.0, total_duration - start_time),
+            value=min(10.0, total_duration - start_time),
         )
         end_time = start_time + duration
 
@@ -375,10 +412,10 @@ if edf_file_paths:
                 )
                 st.plotly_chart(fig_band, use_container_width=True)
 
-            # # 3D Визуализация мозга
-            # st.subheader("3D Визуализация мозга")
-            # # Закомментируем код визуализации до тех пор, пока не будет найден корректный источник модели мозга
-            # st.write("3D визуализация мозга временно недоступна.")
+            # 3D Визуализация мозга
+            st.subheader("3D Визуализация мозга")
+            # Закомментируем код визуализации до тех пор, пока не будет найден корректный источник модели мозга
+            st.write("3D визуализация мозга временно недоступна.")
             # try:
             #     from urllib.request import urlopen
             #     import json
