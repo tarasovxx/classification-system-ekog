@@ -2,3 +2,6 @@ streamlit
 pyedflib
 numpy
 matplotlib
+pykalman
+scipy
+plotly
