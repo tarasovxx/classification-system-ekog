@@ -7,9 +7,14 @@ import os
 from pykalman import KalmanFilter
 from scipy.signal import butter, lfilter, spectrogram
 import plotly.graph_objs as go
+import plotly.io as pio
 import zipfile
 import re
 import datetime
+import requests
+import base64  # Для скачивания файла
+import pdfkit
+import streamlit.components.v1 as components
 
 st.title("Анализ и визуализация ЭКоГ данных крыс WAG/Rij")
 
@@ -70,7 +75,7 @@ if edf_file_paths:
     selected_file_index = original_file_names.index(selected_file)
     selected_file_path = edf_file_paths[selected_file_index]
 
-    # Поиск соответствующего TXT-файла
+    # Поиск соответствующего TXT-файла для выбранного файла
     base_filename = os.path.splitext(os.path.basename(selected_file))[0]
     base_filename = base_filename.split('.')[0]
     if base_filename.endswith("fully_marked"):
@@ -101,7 +106,7 @@ if edf_file_paths:
 
     # Функция для парсинга и поиска корректных интервалов
     def parse_intervals(file_path):
-        intervals_df = pd.read_csv(file_path, sep='\t', header=None, names=['NN', 'Время', 'Маркер'])
+        intervals_df = pd.read_csv(file_path, sep='\t', header=None, names=['NN', 'Время', 'Маркер'], encoding='utf-8')
         intervals_df['Начало'] = intervals_df['Время'].apply(time_to_seconds)
 
         # Удаляем строки с некорректным временем
@@ -136,7 +141,81 @@ if edf_file_paths:
 
         return valid_intervals_df
 
-    # Парсинг TXT-файла с использованием новой логики
+    # Создаем список для хранения данных по каждому файлу
+    files_data = []
+
+    # Словарь для расшифровки маркеров
+    marker_explanations = {
+        'swd': 'Эпилепсия',
+        'ds': 'Глубокий сон',
+        'is': 'Промежуточный сон'
+    }
+
+    # Проходим по всем файлам и собираем данные
+    for i, edf_file_path in enumerate(edf_file_paths):
+        edf_file_name = original_file_names[i]
+        # Поиск соответствующего TXT-файла
+        base_filename = os.path.splitext(os.path.basename(edf_file_name))[0]
+        base_filename = base_filename.split('.')[0]
+        if base_filename.endswith("fully_marked"):
+            base_filename = base_filename.split("_fully_marked")[0]
+        matching_txt_file = None
+        for txt_file in txt_file_paths:
+            txt_base_filename = os.path.splitext(os.path.basename(txt_file))[0]
+            if txt_base_filename == base_filename:
+                matching_txt_file = txt_file
+                break
+
+        intervals_df = None
+        if matching_txt_file:
+            intervals_df = parse_intervals(matching_txt_file)
+
+        # Читаем EDF-файл, чтобы получить общую длительность
+        try:
+            with pyedflib.EdfReader(edf_file_path) as edf_reader:
+                n_channels = edf_reader.signals_in_file
+                signal_labels = edf_reader.getSignalLabels()
+                channel_index = 0  # Используем первый канал по умолчанию
+                data = edf_reader.readSignal(channel_index)
+                sfreq = edf_reader.getSampleFrequency(channel_index)
+                total_duration = len(data) / sfreq
+        except Exception as e:
+            st.error(f"Ошибка при чтении EDF-файла {edf_file_name}: {e}")
+            continue
+
+        # Если intervals_df не пустой, вычисляем длительности по маркерам
+        phase_durations = {}
+        if intervals_df is not None and not intervals_df.empty:
+            for marker in intervals_df['Маркер'].unique():
+                marker_intervals = intervals_df[intervals_df['Маркер'] == marker]
+                total_phase_duration = (marker_intervals['Конец'] - marker_intervals['Начало']).sum()
+                phase_name = marker_explanations.get(marker, marker)
+                phase_durations[phase_name] = total_phase_duration
+
+            # Вычисляем длительность "Обычной" фазы
+            total_marked_duration = intervals_df.apply(lambda row: row['Конец'] - row['Начало'], axis=1).sum()
+            normal_duration = total_duration - total_marked_duration
+        else:
+            normal_duration = total_duration  # Если нет маркеров, вся запись считается "Обычной"
+
+        if normal_duration < 0:
+            normal_duration = 0
+
+        phase_durations['Обычная фаза'] = normal_duration
+
+        # Сохраняем данные
+        files_data.append({
+            'file_name': edf_file_name,
+            'total_duration': total_duration,
+            'phase_durations': phase_durations
+        })
+
+    # Добавляем кнопку для генерации отчёта
+    generate_report = st.sidebar.button("Сгенерировать отчёт")
+
+
+    # Продолжаем с обработкой выбранного файла
+    # Парсинг TXT-файла для выбранного файла
     intervals_df = None
     marker_colors = {}
     if matching_txt_file:
@@ -144,22 +223,12 @@ if edf_file_paths:
 
         if not intervals_df.empty:
             # Преобразование времени в формат mm:ss - mm:ss
-            # intervals_df['Время_формат'] = intervals_df['Начало'].apply(
-            #     lambda x: str(datetime.timedelta(seconds=int(x)))[2:7] if pd.notnull(x) else 'Unknown'
-            # )
             intervals_df['Время_формат'] = intervals_df.apply(lambda row:
             (str(datetime.timedelta(seconds=int(row['Начало'])))[2:7] if pd.notnull(row['Начало']) else 'Unknown') + " - " +
             (str(datetime.timedelta(seconds=int(row['Конец'])))[2:7] if pd.notnull(row['Конец']) else 'Unknown'), axis=1)
 
             # Сортировка интервалов по времени начала
             intervals_df = intervals_df.sort_values(by='Начало').reset_index(drop=True)
-
-            # Словарь для расшифровки маркеров
-            marker_explanations = {
-                'swd': 'эпилептический разряд',
-                'ds': 'фаза глубокого сна',
-                'is': 'промежуточная фаза сна'
-            }
 
             # Маркеры уже содержат базовые маркеры
             intervals_df['Базовый_маркер'] = intervals_df['Маркер']
@@ -175,10 +244,6 @@ if edf_file_paths:
                 color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options,
                                              index=i % len(color_options), key=f"color_{base_marker}")
                 marker_colors[base_marker] = color
-            # for base_marker in unique_base_markers:
-            #     explanation = marker_explanations.get(base_marker, base_marker)
-            #     color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options, index=0, key=f"color_{base_marker}")
-            #     marker_colors[base_marker] = color
         else:
             st.write("Нет корректных интервалов в TXT-файле.")
 
@@ -325,7 +390,7 @@ if edf_file_paths:
                     ),
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
+                return fig  # Возвращаем фигуру для дальнейшего использования
 
             # Боковая панель с интервалами
             if intervals_df is not None and not intervals_df.empty:
@@ -349,23 +414,23 @@ if edf_file_paths:
                     st.write(f"**Время:** {start_time_str} - {end_time_str}")
 
                     # Не изменяем временное окно, просто выделяем выбранный интервал на графике
-                    plot_main_signal(highlighted_interval_idx=interval_idx)
+                    fig = plot_main_signal(highlighted_interval_idx=interval_idx)
                 else:
                     # Если выбран "Без выбранного интервала" или кнопка не нажата
                     st.write("Отображается текущий сигнал с интервалами.")
-                    plot_main_signal()
+                    fig = plot_main_signal()
             else:
                 # Если нет интервалов или TXT-файл не загружен
                 st.write("Интервалы не найдены или TXT-файл не загружен.")
-                plot_main_signal()
+                fig = plot_main_signal()
 
             # Спектрограмма
             st.subheader("Спектрограмма сигнала")
-            f, t_spec, Sxx = spectrogram(signal_data_filtered, fs=sfreq)
+            f_spec, t_spec, Sxx = spectrogram(signal_data_filtered, fs=sfreq)
             t_spec_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts + start_time) for ts in t_spec]
             fig_spectrogram = go.Figure(data=go.Heatmap(
                 x=t_spec_datetime,
-                y=f,
+                y=f_spec,
                 z=10 * np.log10(Sxx),
                 colorscale='Viridis'
             ))
@@ -419,20 +484,157 @@ if edf_file_paths:
             st.subheader("3D Визуализация мозга")
             # Закомментируем код визуализации до тех пор, пока не будет найден корректный источник модели мозга
             st.write("3D визуализация мозга временно недоступна.")
-            # try:
-            #     from urllib.request import urlopen
-            #     import json
-
-            #     url = 'https://raw.githubusercontent.com/plotly/datasets/master/mesh3d_sample_data/brain_surface.obj'
-            #     response = urlopen(url)
-            #     brain_mesh_data = response.read().decode('utf-8')
-
-            #     # Парсинг OBJ-файла или использование альтернативного способа визуализации
-
-            #     st.write("Модель мозга успешно загружена.")
-            # except Exception as e:
-            #     st.error(f"Не удалось загрузить модель мозга: {e}")
-            #     st.write("Попробуйте снова или обратитесь к администратору.")
 
     except Exception as e:
         st.error(f"Произошла ошибка: {e}")
+
+    if generate_report:
+        # Подготавливаем данные для отчёта
+        total_phase_durations = {}
+        for data in files_data:
+            for phase, duration in data['phase_durations'].items():
+                total_phase_durations[phase] = total_phase_durations.get(phase, 0) + duration
+
+        # Вычисляем процентное соотношение фаз
+        total_time = sum(total_phase_durations.values())
+        phase_percentages = {}
+        for phase, duration in total_phase_durations.items():
+            if total_time > 0:
+                phase_percentages[phase] = (duration / total_time) * 100
+            else:
+                phase_percentages[phase] = 0
+
+        # Определяем топ-файлы по каждой фазе
+        top_files_per_phase = {}
+        for phase in total_phase_durations.keys():
+            max_duration = 0
+            top_file = None
+            for data in files_data:
+                duration = data['phase_durations'].get(phase, 0)
+                if duration > max_duration:
+                    max_duration = duration
+                    top_file = data['file_name']
+            if top_file:
+                top_files_per_phase[phase] = top_file
+
+        # Подготавливаем prompt для GPT
+        prompt = "Статистика фаз:\n"
+        for phase, percentage in phase_percentages.items():
+            prompt += f"- {phase}: {percentage:.2f}%\n"
+        prompt += "Топ файлы по фазам:\n"
+        for phase, file_name in top_files_per_phase.items():
+            prompt += f"- {phase}: {file_name}\n"
+        prompt += "Сгенерируй выводы на основе этой статистики. Для крыс."
+
+        print(prompt)
+        OLLAMA_BASE_URL = 'http://localhost:5001/'  # Замените на ваш URL
+        try:
+            payload = {
+                "model": "your_model_name",  # Замените на название вашей модели
+                "prompt": prompt,
+                "stream": False
+            }
+            response = requests.post(f"{OLLAMA_BASE_URL}/generate_completion", json=payload)
+            if response.status_code == 200:
+                gpt_conclusions = response.json().get('response', '')
+            else:
+                gpt_conclusions = "Ошибка при вызове GPT эндпойнта."
+        except Exception as e:
+            gpt_conclusions = f"Ошибка при вызове GPT эндпойнта: {e}"
+
+        # Подготовка HTML-контента отчёта
+        report_content = f"""
+        <!DOCTYPE html>
+        <html lang="ru">
+        <head>
+            <meta charset="UTF-8">
+            <title>Отчёт по анализу ЭКоГ данных</title>
+            <style>
+                body {{
+                    font-family: 'DejaVu Sans', sans-serif;
+                }}
+                img {{
+                    max-width: 100%;
+                    height: auto;
+                }}
+            </style>
+        </head>
+        <body>
+        <h1>Отчёт по анализу ЭКоГ данных</h1>
+        <h2>Относительная статистика фаз</h2>
+        <ul>
+        """
+        for phase, percentage in phase_percentages.items():
+            report_content += f"<li>{phase}: {percentage:.2f}%</li>"
+        report_content += "</ul>"
+
+        report_content += "<h2>Топ файлы по фазам</h2><ul>"
+        for phase, file_name in top_files_per_phase.items():
+            report_content += f"<li>{phase}: {file_name}</li>"
+        report_content += "</ul>"
+
+        report_content += f"<h2>Выводы GPT</h2><p>{gpt_conclusions}</p>"
+
+        # Добавление изображений в отчёт
+        # Проверьте, что графики уже созданы, или создайте их здесь
+        # Сохранение графиков как изображений
+        # Убедитесь, что у вас есть fig и fig_spectrogram, если нет - создайте их
+
+        # Если вы хотите использовать последние построенные графики, сохраните их
+        # Если графики еще не созданы, создайте их здесь или используйте ранее созданные
+
+        # Предполагается, что функции plot_main_signal() и создание fig_spectrogram были вызваны ранее
+
+        # Сохранение графиков как изображений
+        main_signal_image_path = os.path.join(temp_dir, 'main_signal.png')
+        spectrogram_image_path = os.path.join(temp_dir, 'spectrogram.png')
+
+        # Сохранение основного сигнала
+        pio.write_image(fig, main_signal_image_path)
+        # Сохранение спектрограммы
+        pio.write_image(fig_spectrogram, spectrogram_image_path)
+
+        # Конвертация изображений в base64
+        def img_to_base64(img_path):
+            with open(img_path, 'rb') as f:
+                img_bytes = f.read()
+            return base64.b64encode(img_bytes).decode('utf-8')
+
+        main_signal_base64 = img_to_base64(main_signal_image_path)
+        spectrogram_base64 = img_to_base64(spectrogram_image_path)
+
+        report_content += f"""
+        <h2>Основной сигнал</h2>
+        <img src="data:image/png;base64,{main_signal_base64}" alt="Основной сигнал">
+
+        <h2>Спектрограмма сигнала</h2>
+        <img src="data:image/png;base64,{spectrogram_base64}" alt="Спектрограмма">
+        """
+
+        # Закрываем HTML-документ
+        report_content += "</body></html>"
+
+        # Отображение отчёта в приложении
+        components.html(report_content, height=800, scrolling=True)
+
+        # Генерация PDF
+        try:
+            pdf_file_path = os.path.join(temp_dir, 'report.pdf')
+            options = {
+                'encoding': 'UTF-8',
+            }
+            pdfkit.from_string(report_content, pdf_file_path, options=options)
+
+            # Ссылка для скачивания PDF
+            with open(pdf_file_path, "rb") as f:
+                data = f.read()
+                b64 = base64.b64encode(data).decode('utf-8')
+                href = f'<a href="data:application/octet-stream;base64,{b64}" download="report.pdf">Скачать отчёт в PDF</a>'
+                st.markdown(href, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Не удалось сгенерировать PDF: {e}")
+            # Скачивание отчёта в HTML
+            b64 = base64.b64encode(report_content.encode('utf-8')).decode('utf-8')
+            href = f'<a href="data:text/html;base64,{b64}" download="report.html">Скачать отчёт в HTML</a>'
+            st.markdown(href, unsafe_allow_html=True)
+
