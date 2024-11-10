@@ -506,8 +506,7 @@ if edf_file_paths:
 
         # 3D Визуализация мозга
         st.subheader("3D Визуализация мозга")
-        with open("/Users/daniil.galimov/Downloads/InputData_08_oct 2/brain/Right Thalamus.html",
-                  'r') as file:
+        with open("Right Thalamus.html", 'r') as file:
             brain_html = file.read()
 
         # Display the HTML 3D brain in Streamlit
