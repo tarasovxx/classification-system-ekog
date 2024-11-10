@@ -72,6 +72,9 @@ if edf_file_paths:
 
     # Поиск соответствующего TXT-файла
     base_filename = os.path.splitext(os.path.basename(selected_file))[0]
+    base_filename = base_filename.split('.')[0]
+    if base_filename.endswith("fully_marked"):
+        base_filename = base_filename.split("_fully_marked")[0]
     matching_txt_file = None
     for txt_file in txt_file_paths:
         txt_base_filename = os.path.splitext(os.path.basename(txt_file))[0]
@@ -140,10 +143,13 @@ if edf_file_paths:
         intervals_df = parse_intervals(matching_txt_file)
 
         if not intervals_df.empty:
-            # Преобразование времени в формат mm:ss
-            intervals_df['Время_формат'] = intervals_df['Начало'].apply(
-                lambda x: str(datetime.timedelta(seconds=int(x)))[2:7] if pd.notnull(x) else 'Unknown'
-            )
+            # Преобразование времени в формат mm:ss - mm:ss
+            # intervals_df['Время_формат'] = intervals_df['Начало'].apply(
+            #     lambda x: str(datetime.timedelta(seconds=int(x)))[2:7] if pd.notnull(x) else 'Unknown'
+            # )
+            intervals_df['Время_формат'] = intervals_df.apply(lambda row:
+            (str(datetime.timedelta(seconds=int(row['Начало'])))[2:7] if pd.notnull(row['Начало']) else 'Unknown') + " - " +
+            (str(datetime.timedelta(seconds=int(row['Конец'])))[2:7] if pd.notnull(row['Конец']) else 'Unknown'), axis=1)
 
             # Сортировка интервалов по времени начала
             intervals_df = intervals_df.sort_values(by='Начало').reset_index(drop=True)
@@ -164,10 +170,15 @@ if edf_file_paths:
             marker_colors = {}
             color_options = ['red', 'green', 'blue', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
             st.sidebar.subheader("Выбор цветов для маркеров")
-            for base_marker in unique_base_markers:
+            for i, base_marker in enumerate(unique_base_markers):
                 explanation = marker_explanations.get(base_marker, base_marker)
-                color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options, index=0, key=f"color_{base_marker}")
+                color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options,
+                                             index=i % len(color_options), key=f"color_{base_marker}")
                 marker_colors[base_marker] = color
+            # for base_marker in unique_base_markers:
+            #     explanation = marker_explanations.get(base_marker, base_marker)
+            #     color = st.sidebar.selectbox(f"Цвет для {explanation} ({base_marker})", color_options, index=0, key=f"color_{base_marker}")
+            #     marker_colors[base_marker] = color
         else:
             st.write("Нет корректных интервалов в TXT-файле.")
 
