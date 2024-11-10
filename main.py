@@ -30,6 +30,7 @@ edf_file_paths = []
 txt_file_paths = []
 original_file_names = []
 
+
 # Функции для обработки загрузки файлов
 def process_uploaded_files(uploaded_files):
     for uploaded_file in uploaded_files:
@@ -40,6 +41,7 @@ def process_uploaded_files(uploaded_files):
                 f.write(uploaded_file.read())
             edf_file_paths.append(temp_file_path)
 
+
 def process_uploaded_txt_files(uploaded_txt_files):
     for uploaded_file in uploaded_txt_files:
         if uploaded_file.name not in [os.path.basename(path) for path in txt_file_paths]:
@@ -47,6 +49,7 @@ def process_uploaded_txt_files(uploaded_txt_files):
             with open(temp_file_path, 'wb') as f:
                 f.write(uploaded_file.read())
             txt_file_paths.append(temp_file_path)
+
 
 def process_uploaded_zip(uploaded_zip):
     with zipfile.ZipFile(uploaded_zip) as zf:
@@ -63,8 +66,10 @@ def process_uploaded_zip(uploaded_zip):
                     if file_path not in txt_file_paths:
                         txt_file_paths.append(file_path)
 
+
 # Выбор способа загрузки файлов
-upload_option = st.radio("Выберите способ загрузки файлов", ("Загрузить файлы (.edf и .txt)", "Загрузить архив .zip с файлами"))
+upload_option = st.radio("Выберите способ загрузки файлов",
+                         ("Загрузить файлы (.edf и .txt)", "Загрузить архив .zip с файлами"))
 
 if upload_option == "Загрузить файлы (.edf и .txt)":
     uploaded_files = st.file_uploader("Загрузите файлы .edf", type="edf", accept_multiple_files=True)
@@ -93,6 +98,7 @@ if edf_file_paths:
             matching_txt_file = txt_file
             break
 
+
     # Функция для преобразования времени в секунды
     def time_to_seconds(t):
         try:
@@ -109,6 +115,7 @@ if edf_file_paths:
                 return None
         except ValueError:
             return None
+
 
     # Функция для парсинга и поиска корректных интервалов
     def parse_intervals(file_path):
@@ -154,6 +161,7 @@ if edf_file_paths:
 
         return valid_intervals_df
 
+
     # Функция для форматирования времени в hh:mm:ss
     def seconds_to_hh_mm_ss(seconds):
         try:
@@ -165,6 +173,7 @@ if edf_file_paths:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         except:
             return 'Unknown'
+
 
     # Функция для загрузки и обработки сигнала из EDF
     def load_edf_signal(edf_path, channel_name=None):
@@ -182,6 +191,7 @@ if edf_file_paths:
             time_array = np.linspace(0, total_duration, len(data))
         return data, sfreq, time_array, channel_name
 
+
     # Функция для присваивания цветов маркерам (только базовые маркеры)
     def assign_marker_colors(intervals_df):
         unique_markers = intervals_df['Маркер'].unique()
@@ -191,14 +201,16 @@ if edf_file_paths:
                 color = st.sidebar.selectbox(
                     f"Цвет для {marker}",
                     color_options,
-                    index=i%len(color_options),
+                    index=i % len(color_options),
                     key=f"color_{marker}"
                 )
                 st.session_state['marker_colors'][marker] = color
         return st.session_state['marker_colors']
 
+
     # Функция для создания основного Plotly графика
-    def plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors, selected_interval_idx=None, xrange=None):
+    def plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors,
+                         selected_interval_idx=None, xrange=None):
         fig = go.Figure()
 
         # Отображаем исходный сигнал
@@ -292,6 +304,7 @@ if edf_file_paths:
 
         st.plotly_chart(fig, use_container_width=True)
 
+
     # Функция для создания дополнительного графика всех интервалов
     def plot_all_intervals(intervals_df, marker_colors, total_duration):
         fig = go.Figure()
@@ -338,51 +351,44 @@ if edf_file_paths:
             plot_bgcolor='white',
             paper_bgcolor='white',
             xaxis=dict(
-                range=[datetime.datetime(1900, 1, 1), datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=total_duration)],
+                range=[datetime.datetime(1900, 1, 1),
+                       datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=total_duration)],
                 tickformat='%H:%M:%S',
             ),
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
+
     # Функция для генерации интервалов программно
     def generate_intervals(total_duration, num_intervals=5, min_duration=10, max_duration=60):
         np.random.seed(42)  # Для воспроизводимости
         intervals = []
-        available_segments = [(0, total_duration)]
+        segment_length = total_duration / num_intervals  # Длина каждого сегмента
 
-        for _ in range(num_intervals):
-            if not available_segments:
-                st.warning("Недостаточно доступного времени для генерации всех интервалов.")
-                break  # Нет доступного времени для генерации оставшихся интервалов
+        for i in range(num_intervals):
+            segment_start = i * segment_length  # Начало сегмента
+            segment_end = (i + 1) * segment_length  # Конец сегмента
+            available_duration = segment_end - segment_start  # Доступная длительность в сегменте
 
-            # Выбираем случайный доступный сегмент
-            segment_idx = np.random.randint(0, len(available_segments))
-            segment_start, segment_end = available_segments.pop(segment_idx)
+            if available_duration < min_duration:
+                st.warning(f"Недостаточно места в сегменте {i + 1} для генерации интервала.")
+                continue  # Пропустить сегмент, если недостаточно места для минимальной длительности
 
-            # Определяем максимально возможную длительность в этом сегменте
-            max_possible_duration = min(max_duration, segment_end - segment_start)
-            if max_possible_duration < min_duration:
-                continue  # Недостаточно места для генерации интервала
+            # Ограничиваем максимальную длительность интервала доступной длительностью в сегменте
+            duration = np.random.uniform(min_duration, min(max_duration, available_duration))
 
-            # Генерируем длительность интервала
-            duration = np.random.uniform(min_duration, max_possible_duration)
-            # Генерируем начальное время интервала в пределах сегмента
+            # Генерируем начальное время интервала внутри сегмента
             start = np.random.uniform(segment_start, segment_end - duration)
-            print(f"np.random.uniform(segment_start, segment_end - duration) {start=}")
-            end = start + duration
+            end = start + duration  # Конец интервала
+
             marker = np.random.choice(['ds', 'is', 'swd'])  # Выбор случайного маркера
             intervals.append({'Начало': start, 'Конец': end, 'Маркер': marker})
-
-            # Обновляем доступные сегменты
-            if start > segment_start:
-                available_segments.append((segment_start, start))
-            if end < segment_end:
-                available_segments.append((end, segment_end))
 
         # Сортируем интервалы по времени начала
         intervals = sorted(intervals, key=lambda x: x['Начало'])
         return pd.DataFrame(intervals)
+
 
     # Функция для фильтрации сигнала
     def filter_signal(signal_data, filter_type, lowcut, highcut, order, sfreq):
@@ -395,6 +401,7 @@ if edf_file_paths:
             return lfilter(b, a, signal_data)
         else:
             return signal_data  # Без фильтрации
+
 
     try:
         # Загрузка сигнала из EDF
@@ -423,7 +430,8 @@ if edf_file_paths:
 
             if generate_button:
                 # Генерация интервалов
-                generated_intervals = generate_intervals(total_duration, num_intervals=30, min_duration=15, max_duration=200)
+                generated_intervals = generate_intervals(total_duration, num_intervals=30, min_duration=50,
+                                                         max_duration=1000)
                 st.session_state['intervals_df'] = generated_intervals
 
                 # Добавляем форматированное время
@@ -512,14 +520,16 @@ if edf_file_paths:
 
                 # Обновляем временные метки для отображения
                 time_array_selected = np.linspace(start_time, end_time, len(signal_data))
-                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in time_array_selected]
+                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in
+                                       time_array_selected]
 
                 # Устанавливаем диапазон оси X для зума
                 xrange = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(start_time)),
                           datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(end_time))]
 
                 # Отображаем график с выделенным интервалом и зумом
-                plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors, selected_interval_idx=interval_idx, xrange=xrange)
+                plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors,
+                                 selected_interval_idx=interval_idx, xrange=xrange)
             else:
                 st.write("Отображается весь сигнал с интервалами.")
                 signal_data = data[int(start_time * sfreq):int(end_time * sfreq)]
@@ -529,7 +539,8 @@ if edf_file_paths:
                     signal_data_filtered = signal_data  # Без фильтрации
 
                 time_array_selected = np.linspace(start_time, end_time, len(signal_data))
-                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in time_array_selected]
+                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in
+                                       time_array_selected]
 
                 plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors)
         else:
@@ -543,7 +554,8 @@ if edf_file_paths:
                 signal_data_filtered = signal_data  # Без фильтрации
 
             time_array_selected = np.linspace(start_time, end_time, len(signal_data))
-            time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in time_array_selected]
+            time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in
+                                   time_array_selected]
 
             plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors)
 
@@ -552,10 +564,12 @@ if edf_file_paths:
         # Ограничиваем спектрограмму, если данные слишком большие
         max_duration_for_spectrogram = 120.0  # Например, 120 секунд
         if duration > max_duration_for_spectrogram:
-            st.warning(f"Спектрограмма не может быть построена для длительности более {max_duration_for_spectrogram} секунд.")
+            st.warning(
+                f"Спектрограмма не может быть построена для длительности более {max_duration_for_spectrogram} секунд.")
         else:
             f, t_spec, Sxx = spectrogram(signal_data_filtered, fs=sfreq)
-            t_spec_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts) + start_time) for ts in t_spec]
+            t_spec_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts) + start_time) for ts
+                               in t_spec]
             fig_spectrogram = go.Figure(data=go.Heatmap(
                 x=t_spec_datetime,
                 y=f,
