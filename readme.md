@@ -11,7 +11,7 @@
 Здесь будет демо
 
 # Установка
-- `git clone https://github.com/Baltsat/users-rosatom.git`
+- `git clone https://github.com/tarasovxx/classification-system-ekog/`
 Необходим Python версии 3.9 и выше.
 `pip install -r requirements.txt`
 # Запуск
