@@ -252,7 +252,7 @@ if edf_file_paths:
             time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts) for ts in time_array]
 
             # Функция для построения основного графика
-            def plot_main_signal():
+            def plot_main_signal(highlighted_interval_idx=None):
                 st.subheader(f"Сигнал канала: {selected_channel}")
                 fig = go.Figure()
 
@@ -283,21 +283,31 @@ if edf_file_paths:
                 if intervals_df is not None and not intervals_df.empty:
                     intervals_in_range = intervals_df[
                         (intervals_df['Начало'] <= end_time) & (intervals_df['Конец'] >= start_time)
-                    ]
-                    for _, row in intervals_in_range.iterrows():
+                        ]
+                    for idx, row in intervals_in_range.iterrows():
                         interval_start = max(row['Начало'], start_time)
                         interval_end = min(row['Конец'], end_time)
                         x0 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=interval_start)
                         x1 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=interval_end)
                         base_marker = row['Базовый_маркер']
                         color = marker_colors.get(base_marker, 'red')  # Получаем цвет базового маркера
+
+                        # Проверяем, является ли текущий интервал выбранным
+                        if highlighted_interval_idx is not None and idx == highlighted_interval_idx:
+                            opacity = 0.5  # Более заметное выделение для выбранного интервала
+                            line_width = 2  # Обводка для выделения
+                        else:
+                            opacity = 0.2
+                            line_width = 0
+
                         fig.add_vrect(
                             x0=x0,
                             x1=x1,
                             fillcolor=color,
-                            opacity=0.2,
+                            opacity=opacity,
                             layer="below",
-                            line_width=0,
+                            line_width=line_width,
+                            line_color='black',  # Цвет обводки
                             annotation_text=row['Маркер'],
                             annotation_position="top left"
                         )
@@ -316,6 +326,7 @@ if edf_file_paths:
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+
             # Боковая панель с интервалами
             if intervals_df is not None and not intervals_df.empty:
                 st.sidebar.subheader("Интервалы из TXT-файла")
@@ -332,35 +343,16 @@ if edf_file_paths:
                     interval_idx = intervals_df.index[interval_options.index(selected_interval) - 1]
                     interval_start = intervals_df.loc[interval_idx, 'Начало']
                     interval_end = intervals_df.loc[interval_idx, 'Конец']
-                    st.write(f"Выбранный интервал: {selected_interval}")
+                    st.write(f"**Выбранный интервал:** {selected_interval}")
                     start_time_str = str(datetime.timedelta(seconds=int(interval_start)))[2:7]
                     end_time_str = str(datetime.timedelta(seconds=int(interval_end)))[2:7]
-                    st.write(f"Время: {start_time_str} - {end_time_str}")
+                    st.write(f"**Время:** {start_time_str} - {end_time_str}")
 
-                    # Обновляем временное окно на выбранный интервал
-                    start_time = interval_start
-                    end_time = interval_end
-                    duration = end_time - start_time
-                    start_idx = int(start_time * sfreq)
-                    end_idx = int(end_time * sfreq)
-                    signal_data = data[start_idx:end_idx]
-                    if filter_type == "Фильтр Калмана":
-                        kf = KalmanFilter(initial_state_mean=0, n_dim_obs=1)
-                        signal_data_filtered, _ = kf.filter(signal_data)
-                        signal_data_filtered = signal_data_filtered.flatten()
-                    elif filter_type == "Фильтр Баттерворта":
-                        b, a = butter(order, [lowcut / nyquist, highcut / nyquist], btype="band")
-                        signal_data_filtered = lfilter(b, a, signal_data)
-                    else:
-                        signal_data_filtered = signal_data
-                    time_array = np.linspace(start_time, end_time, len(signal_data))
-                    time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts) for ts in time_array]
-
-                    # Построение графика для выбранного интервала
-                    plot_main_signal()
+                    # Не изменяем временное окно, просто выделяем выбранный интервал на графике
+                    plot_main_signal(highlighted_interval_idx=interval_idx)
                 else:
                     # Если выбран "Без выбранного интервала" или кнопка не нажата
-                    st.write("Выбран 'Без выбранного интервала'. Отображается текущий сигнал с интервалами.")
+                    st.write("Отображается текущий сигнал с интервалами.")
                     plot_main_signal()
             else:
                 # Если нет интервалов или TXT-файл не загружен
