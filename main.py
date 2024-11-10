@@ -14,9 +14,15 @@ import streamlit.components.v1 as components
 
 st.title("Анализ и визуализация ЭКоГ данных крыс WAG/Rij")
 
-# Создаём временную директорию для загруженных файлов
+# Инициализация session_state для хранения интервалов и цветов маркеров
 if 'temp_dir' not in st.session_state:
     st.session_state['temp_dir'] = tempfile.TemporaryDirectory()
+
+if 'intervals_df' not in st.session_state:
+    st.session_state['intervals_df'] = pd.DataFrame(columns=['Начало', 'Конец', 'Маркер'])
+
+if 'marker_colors' not in st.session_state:
+    st.session_state['marker_colors'] = {}
 
 temp_dir = st.session_state['temp_dir'].name
 
@@ -147,7 +153,7 @@ if edf_file_paths:
     # Функция для форматирования времени в hh:mm:ss
     def seconds_to_hh_mm_ss(seconds):
         try:
-            td = datetime.timedelta(seconds=int(seconds))
+            td = datetime.timedelta(seconds=float(seconds))
             total_seconds = int(td.total_seconds())
             hours = total_seconds // 3600
             minutes = (total_seconds % 3600) // 60
@@ -175,22 +181,20 @@ if edf_file_paths:
     # Функция для присваивания цветов маркерам (только базовые маркеры)
     def assign_marker_colors(intervals_df):
         unique_markers = intervals_df['Маркер'].unique()
-        marker_colors = {}
-        st.sidebar.subheader("Выбор цветов для маркеров")
-        color_options = ['red', 'green', 'blue', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
         for i, marker in enumerate(unique_markers):
-            explanation = marker  # Здесь можно добавить более понятные расшифровки
-            color = st.sidebar.selectbox(
-                f"Цвет для {explanation}",
-                color_options,
-                index=i % len(color_options),
-                key=f"color_{marker}"
-            )
-            marker_colors[marker] = color
-        return marker_colors
+            if marker not in st.session_state['marker_colors']:
+                color_options = ['red', 'green', 'blue', 'orange', 'purple', 'cyan', 'magenta', 'yellow']
+                color = st.sidebar.selectbox(
+                    f"Цвет для {marker}",
+                    color_options,
+                    index=i % len(color_options),
+                    key=f"color_{marker}"
+                )
+                st.session_state['marker_colors'][marker] = color
+        return st.session_state['marker_colors']
 
     # Функция для создания основного Plotly графика
-    def plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors, selected_interval_idx=None):
+    def plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors, selected_interval_idx=None, xrange=None):
         fig = go.Figure()
 
         # Отображаем исходный сигнал
@@ -226,9 +230,9 @@ if edf_file_paths:
                 marker = row['Маркер']
                 color = marker_colors.get(marker, 'gray')
 
-                # Преобразуем секунды в datetime
-                x0 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=interval_start)
-                x1 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=interval_end)
+                # Преобразуем секунды в datetime, приводя к стандартному типу
+                x0 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(interval_start))
+                x1 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(interval_end))
 
                 # Выделяем выбранный интервал
                 if selected_interval_idx is not None and idx == selected_interval_idx:
@@ -262,7 +266,8 @@ if edf_file_paths:
                 )
             )
 
-        fig.update_layout(
+        # Обновляем макет графика
+        layout = dict(
             title="Визуализация сигнала канала",
             xaxis_title="Время (hh:mm:ss)",
             yaxis_title="Амплитуда",
@@ -276,6 +281,11 @@ if edf_file_paths:
             ),
         )
 
+        if xrange:
+            layout['xaxis']['range'] = xrange
+
+        fig.update_layout(layout)
+
         st.plotly_chart(fig, use_container_width=True)
 
     # Функция для создания дополнительного графика всех интервалов
@@ -288,9 +298,9 @@ if edf_file_paths:
             marker = row['Маркер']
             color = marker_colors.get(marker, 'gray')
 
-            # Преобразуем секунды в datetime
-            x0 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=interval_start)
-            x1 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=interval_end)
+            # Преобразуем секунды в datetime, приводя к стандартному типу
+            x0 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(interval_start))
+            x1 = datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(interval_end))
 
             fig.add_vrect(
                 x0=x0,
@@ -315,6 +325,60 @@ if edf_file_paths:
                 )
             )
 
+        fig.update_layout(
+            title="Все интервалы и их цвета",
+            xaxis_title="Время (hh:mm:ss)",
+            yaxis=dict(showticklabels=False),
+            legend=dict(x=0, y=1),
+            height=300,
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            xaxis=dict(
+                range=[datetime.datetime(1900, 1, 1), datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=total_duration)],
+                tickformat='%H:%M:%S',
+            ),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Функция для генерации интервалов программно
+    def generate_intervals(total_duration, num_intervals=5, min_duration=10, max_duration=60):
+        np.random.seed(42)  # Для воспроизводимости
+        intervals = []
+        available_segments = [(0, total_duration)]
+
+        for _ in range(num_intervals):
+            if not available_segments:
+                st.warning("Недостаточно доступного времени для генерации всех интервалов.")
+                break  # No more available time to allocate intervals
+
+            # Выбираем случайный доступный сегмент
+            segment_idx = np.random.randint(0, len(available_segments))
+            segment_start, segment_end = available_segments.pop(segment_idx)
+
+            # Определяем максимально возможную длительность в этом сегменте
+            max_possible_duration = min(max_duration, segment_end - segment_start)
+            if max_possible_duration < min_duration:
+                continue  # Недостаточно места для генерации интервала
+
+            # Генерируем длительность интервала
+            duration = np.random.uniform(min_duration, max_possible_duration)
+            # Генерируем начальное время интервала в пределах сегмента
+            start = np.random.uniform(segment_start, segment_end - duration)
+            end = start + duration
+            marker = np.random.choice(['ds', 'is', 'swd'])  # Выбор случайного маркера
+            intervals.append({'Начало': start, 'Конец': end, 'Маркер': marker})
+
+            # Обновляем доступные сегменты
+            if start > segment_start:
+                available_segments.append((segment_start, start))
+            if end < segment_end:
+                available_segments.append((end, segment_end))
+
+        # Сортируем интервалы по времени начала
+        intervals = sorted(intervals, key=lambda x: x['Начало'])
+        return pd.DataFrame(intervals)
+
     # Функция для фильтрации сигнала
     def filter_signal(signal_data, filter_type, lowcut, highcut, order, sfreq):
         if filter_type == "Фильтр Калмана":
@@ -334,21 +398,40 @@ if edf_file_paths:
         total_duration = time_array[-1]
 
         # Парсинг интервалов из TXT
-        intervals_df = None
-        marker_colors = {}
         if matching_txt_file:
-            intervals_df = parse_intervals(matching_txt_file)
-
-            if not intervals_df.empty:
+            parsed_intervals = parse_intervals(matching_txt_file)
+            if not parsed_intervals.empty:
+                st.session_state['intervals_df'] = parsed_intervals
                 # Преобразование времени в формат hh:mm:ss - hh:mm:ss
-                intervals_df['Время_формат'] = intervals_df.apply(
+                st.session_state['intervals_df']['Время_формат'] = st.session_state['intervals_df'].apply(
                     lambda row: f"{seconds_to_hh_mm_ss(row['Начало'])} - {seconds_to_hh_mm_ss(row['Конец'])}", axis=1
                 )
-
                 # Присваиваем цвета маркерам через функцию
-                marker_colors = assign_marker_colors(intervals_df)
+                st.session_state['marker_colors'] = assign_marker_colors(st.session_state['intervals_df'])
             else:
                 st.write("Нет корректных интервалов в TXT-файле.")
+
+        # Добавление кнопки для генерации интервалов
+        st.sidebar.subheader("Генерация интервалов")
+        generate_button = st.sidebar.button("Сгенерировать интервалы программно")
+
+        if generate_button:
+            # Генерация интервалов
+            generated_intervals = generate_intervals(total_duration, num_intervals=15, min_duration=100, max_duration=1000)
+            st.session_state['intervals_df'] = generated_intervals
+
+            # Добавляем форматированное время
+            st.session_state['intervals_df']['Время_формат'] = st.session_state['intervals_df'].apply(
+                lambda row: f"{seconds_to_hh_mm_ss(row['Начало'])} - {seconds_to_hh_mm_ss(row['Конец'])}", axis=1
+            )
+
+            # Присваиваем цвета маркерам
+            st.session_state['marker_colors'] = assign_marker_colors(st.session_state['intervals_df'])
+
+            st.sidebar.success("Интервалы успешно сгенерированы!")
+
+        intervals_df = st.session_state['intervals_df']
+        marker_colors = st.session_state['marker_colors']
 
         # Настройка временного окна
         st.write("**Настройка временного окна:**")
@@ -385,7 +468,7 @@ if edf_file_paths:
 
         # Боковая панель с интервалами
         if intervals_df is not None and not intervals_df.empty:
-            st.sidebar.subheader("Интервалы из TXT-файла")
+            st.sidebar.subheader("Интервалы из TXT-файла или сгенерированные")
             # Добавляем опцию "Без выбранного интервала"
             interval_options = ['Без выбранного интервала'] + intervals_df.apply(
                 lambda row: f"{row['Маркер']} ({row['Время_формат']})", axis=1).tolist()
@@ -421,10 +504,14 @@ if edf_file_paths:
 
                 # Обновляем временные метки для отображения
                 time_array_selected = np.linspace(start_time, end_time, len(signal_data))
-                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts) for ts in time_array_selected]
+                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in time_array_selected]
 
-                # Отображаем график с выделенным интервалом
-                plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors, selected_interval_idx=interval_idx)
+                # Устанавливаем диапазон оси X для зума
+                xrange = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(start_time)),
+                          datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(end_time))]
+
+                # Отображаем график с выделенным интервалом и зумом
+                plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors, selected_interval_idx=interval_idx, xrange=xrange)
             else:
                 st.write("Отображается весь сигнал с интервалами.")
                 signal_data = data[int(start_time * sfreq):int(end_time * sfreq)]
@@ -434,7 +521,7 @@ if edf_file_paths:
                     signal_data_filtered = signal_data  # Без фильтрации
 
                 time_array_selected = np.linspace(start_time, end_time, len(signal_data))
-                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts) for ts in time_array_selected]
+                time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in time_array_selected]
 
                 plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors)
         else:
@@ -448,7 +535,7 @@ if edf_file_paths:
                 signal_data_filtered = signal_data  # Без фильтрации
 
             time_array_selected = np.linspace(start_time, end_time, len(signal_data))
-            time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts) for ts in time_array_selected]
+            time_array_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts)) for ts in time_array_selected]
 
             plot_main_signal(signal_data, signal_data_filtered, time_array_datetime, intervals_df, marker_colors)
 
@@ -460,7 +547,7 @@ if edf_file_paths:
             st.warning(f"Спектрограмма не может быть построена для длительности более {max_duration_for_spectrogram} секунд.")
         else:
             f, t_spec, Sxx = spectrogram(signal_data_filtered, fs=sfreq)
-            t_spec_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=ts + start_time) for ts in t_spec]
+            t_spec_datetime = [datetime.datetime(1900, 1, 1) + datetime.timedelta(seconds=float(ts) + start_time) for ts in t_spec]
             fig_spectrogram = go.Figure(data=go.Heatmap(
                 x=t_spec_datetime,
                 y=f,
@@ -536,12 +623,6 @@ if edf_file_paths:
             components.html(brain_html, height=600)
         else:
             st.warning("Файл 3D визуализации мозга (Right Thalamus.html) не найден.")
-
-        # # Дополнительный график всех интервалов в конце страницы
-        # if intervals_df is not None and not intervals_df.empty:
-        #     st.subheader("Все интервалы и их цвета")
-        #
-        #     plot_all_intervals(intervals_df, marker_colors, total_duration)
 
     except Exception as e:
         st.error(f"Произошла ошибка: {e}")
