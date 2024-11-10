@@ -33,18 +33,20 @@ original_file_names = []
 # Функции для обработки загрузки файлов
 def process_uploaded_files(uploaded_files):
     for uploaded_file in uploaded_files:
-        original_file_names.append(uploaded_file.name)
-        temp_file_path = os.path.join(temp_dir, uploaded_file.name)
-        with open(temp_file_path, 'wb') as f:
-            f.write(uploaded_file.read())
-        edf_file_paths.append(temp_file_path)
+        if uploaded_file.name not in original_file_names:
+            original_file_names.append(uploaded_file.name)
+            temp_file_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(temp_file_path, 'wb') as f:
+                f.write(uploaded_file.read())
+            edf_file_paths.append(temp_file_path)
 
 def process_uploaded_txt_files(uploaded_txt_files):
     for uploaded_file in uploaded_txt_files:
-        temp_file_path = os.path.join(temp_dir, uploaded_file.name)
-        with open(temp_file_path, 'wb') as f:
-            f.write(uploaded_file.read())
-        txt_file_paths.append(temp_file_path)
+        if uploaded_file.name not in [os.path.basename(path) for path in txt_file_paths]:
+            temp_file_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(temp_file_path, 'wb') as f:
+                f.write(uploaded_file.read())
+            txt_file_paths.append(temp_file_path)
 
 def process_uploaded_zip(uploaded_zip):
     with zipfile.ZipFile(uploaded_zip) as zf:
@@ -54,10 +56,12 @@ def process_uploaded_zip(uploaded_zip):
                 zf.extract(member, temp_dir)
                 file_path = os.path.join(temp_dir, member.filename)
                 if member.filename.endswith('.edf'):
-                    edf_file_paths.append(file_path)
-                    original_file_names.append(member.filename)
+                    if member.filename not in original_file_names:
+                        edf_file_paths.append(file_path)
+                        original_file_names.append(member.filename)
                 elif member.filename.endswith('.txt'):
-                    txt_file_paths.append(file_path)
+                    if file_path not in txt_file_paths:
+                        txt_file_paths.append(file_path)
 
 # Выбор способа загрузки файлов
 upload_option = st.radio("Выберите способ загрузки файлов", ("Загрузить файлы (.edf и .txt)", "Загрузить архив .zip с файлами"))
@@ -187,7 +191,7 @@ if edf_file_paths:
                 color = st.sidebar.selectbox(
                     f"Цвет для {marker}",
                     color_options,
-                    index=i % len(color_options),
+                    index=i%len(color_options),
                     key=f"color_{marker}"
                 )
                 st.session_state['marker_colors'][marker] = color
@@ -350,7 +354,7 @@ if edf_file_paths:
         for _ in range(num_intervals):
             if not available_segments:
                 st.warning("Недостаточно доступного времени для генерации всех интервалов.")
-                break  # No more available time to allocate intervals
+                break  # Нет доступного времени для генерации оставшихся интервалов
 
             # Выбираем случайный доступный сегмент
             segment_idx = np.random.randint(0, len(available_segments))
@@ -365,6 +369,7 @@ if edf_file_paths:
             duration = np.random.uniform(min_duration, max_possible_duration)
             # Генерируем начальное время интервала в пределах сегмента
             start = np.random.uniform(segment_start, segment_end - duration)
+            print(f"np.random.uniform(segment_start, segment_end - duration) {start=}")
             end = start + duration
             marker = np.random.choice(['ds', 'is', 'swd'])  # Выбор случайного маркера
             intervals.append({'Начало': start, 'Конец': end, 'Маркер': marker})
@@ -411,24 +416,27 @@ if edf_file_paths:
             else:
                 st.write("Нет корректных интервалов в TXT-файле.")
 
-        # Добавление кнопки для генерации интервалов
-        st.sidebar.subheader("Генерация интервалов")
-        generate_button = st.sidebar.button("Сгенерировать интервалы программно")
+        # Добавление кнопки для генерации интервалов только если TXT-файл не выбран
+        if not matching_txt_file:
+            st.sidebar.subheader("Генерация интервалов")
+            generate_button = st.sidebar.button("Сгенерировать интервалы программно")
 
-        if generate_button:
-            # Генерация интервалов
-            generated_intervals = generate_intervals(total_duration, num_intervals=15, min_duration=100, max_duration=1000)
-            st.session_state['intervals_df'] = generated_intervals
+            if generate_button:
+                # Генерация интервалов
+                generated_intervals = generate_intervals(total_duration, num_intervals=30, min_duration=15, max_duration=200)
+                st.session_state['intervals_df'] = generated_intervals
 
-            # Добавляем форматированное время
-            st.session_state['intervals_df']['Время_формат'] = st.session_state['intervals_df'].apply(
-                lambda row: f"{seconds_to_hh_mm_ss(row['Начало'])} - {seconds_to_hh_mm_ss(row['Конец'])}", axis=1
-            )
+                # Добавляем форматированное время
+                st.session_state['intervals_df']['Время_формат'] = st.session_state['intervals_df'].apply(
+                    lambda row: f"{seconds_to_hh_mm_ss(row['Начало'])} - {seconds_to_hh_mm_ss(row['Конец'])}", axis=1
+                )
 
-            # Присваиваем цвета маркерам
-            st.session_state['marker_colors'] = assign_marker_colors(st.session_state['intervals_df'])
+                # Присваиваем цвета маркерам
+                st.session_state['marker_colors'] = assign_marker_colors(st.session_state['intervals_df'])
 
-            st.sidebar.success("Интервалы успешно сгенерированы!")
+                st.sidebar.success("Интервалы успешно сгенерированы!")
+        else:
+            st.sidebar.info("Интервалы загружены из TXT-файла. Генерация программных интервалов отключена.")
 
         intervals_df = st.session_state['intervals_df']
         marker_colors = st.session_state['marker_colors']
@@ -542,7 +550,7 @@ if edf_file_paths:
         # Спектрограмма
         st.subheader("Спектрограмма сигнала")
         # Ограничиваем спектрограмму, если данные слишком большие
-        max_duration_for_spectrogram = float('inf')  # Можно установить лимит, например, 120 секунд
+        max_duration_for_spectrogram = 120.0  # Например, 120 секунд
         if duration > max_duration_for_spectrogram:
             st.warning(f"Спектрограмма не может быть построена для длительности более {max_duration_for_spectrogram} секунд.")
         else:
